@@ -86,6 +86,15 @@ def xyxy2tlwh(x):
     return y
 
 
+def xyxy2xyah(x):
+    y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
+    y[..., 0] = (x[..., 0] + x[..., 2]) / 2
+    y[..., 1] = (x[..., 1] + x[..., 3]) / 2
+    y[..., 2] = (x[..., 2] - x[..., 0]) / (x[..., 3] - x[..., 1])
+    y[..., 3] = x[..., 3] - x[..., 1]
+    return y
+
+
 def tlwh2xyah(x):
     """
     Convert bounding box coordinates from (t, l ,w ,h)
@@ -183,16 +192,17 @@ def letterbox(
     # Add border to the image
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
-    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+    img = cv2.copyMakeBorder(img, top, bottom, left,
+                             right, cv2.BORDER_CONSTANT, value=color)
 
     return img, ratio, (dw, dh)
 
 
 # This preprocess differs from the current version of YOLOX preprocess, but ByteTrack uses it
 # https://github.com/ifzhang/ByteTrack/blob/d1bf0191adff59bc8fcfeaa0b33d3d1642552a99/yolox/data/data_augment.py#L189
-def bytetrack_preprocess(image, input_size, 
-                         mean=(0.485, 0.456, 0.406), 
-                         std=(0.229, 0.224, 0.225), 
+def bytetrack_preprocess(image, input_size,
+                         mean=(0.485, 0.456, 0.406),
+                         std=(0.229, 0.224, 0.225),
                          swap=(2, 0, 1)):
     if len(image.shape) == 3:
         padded_img = np.ones((input_size[0], input_size[1], 3)) * 114.0
