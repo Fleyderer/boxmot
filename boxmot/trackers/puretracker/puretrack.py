@@ -423,8 +423,11 @@ class PureTrackNew(BaseTracker):
             self.active_pool, self.lost_pool
         )
 
-        # save_pool = np.union1d(self.active_pool, self.lost_pool)
-        # self.tracks_storage.cleanup(save_pool)
+        # Clean up removed tracks
+        if self.frame_count % self.buffer_size == 0:
+            save_pool = np.union1d(self.active_pool, self.lost_pool)
+            self.tracks_storage.cleanup(save_pool)
+            self.removed_pool = np.intersect1d(self.removed_pool, save_pool)
 
         output_pool = np.intersect1d(
             self.active_pool, self.tracks_storage.is_activated_tracks == True)

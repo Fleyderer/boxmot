@@ -30,7 +30,7 @@ frame_rate:
   
 with_reid:
   type: choice
-  default: True  # from the default parameters
+  default: False  # from the default parameters
   options: [False, True]
   
 emb_mode:
@@ -55,6 +55,6 @@ dets_storage_size:
   
 tracks_storage_size:
   type: choice
-  default: 250  # from the default parameters
-  range: [250]  # step size of 10, upper bound exclusive
+  default: 100  # from the default parameters
+  range: [100]  # step size of 10, upper bound exclusive
 
