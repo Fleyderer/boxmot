@@ -140,8 +140,6 @@ class PureTrackNew(BaseTracker):
         emb_thresh: float = 0.5,
     ):
         super().__init__(per_class=per_class)
-        self.dets_storage = TrackStorage(size=dets_storage_size,
-                                         auto_increase=True)
         self.tracks_storage = TrackStorage(size=tracks_storage_size,
                                            auto_increase=True)
 
@@ -177,6 +175,8 @@ class PureTrackNew(BaseTracker):
 
     def _split_detections(self, dets: np.ndarray, embs: np.ndarray):
         dets = np.hstack((dets, np.arange(len(dets)).reshape(-1, 1)))
+        dets_xywh = dets.copy()
+        dets_xywh[:, :4] = xyxy2xywh(dets_xywh[:, :4])
         confs = dets[:, 4]
         inds_first = confs > self.track_high_thresh
 
@@ -186,14 +186,15 @@ class PureTrackNew(BaseTracker):
 
         dets_high = dets[inds_first]
         dets_low = dets[inds_second]
+        dets_high_xywh = dets_xywh[inds_first]
+        dets_low_xywh = dets_xywh[inds_second]
         embs_high = embs[inds_first] if embs is not None else None
 
-        return dets, dets_high, dets_low, embs_high
+        return dets, dets_high, dets_low, dets_high_xywh, dets_low_xywh, embs_high
 
     def process_matches(self,
                         tracks_matches_pool: np.ndarray,
-                        dets_matches_pool: np.ndarray,
-                        update_embs: bool = False):
+                        dets: np.ndarray, embs: np.ndarray = None):
 
         # Split tracks pool to update and reactivate
         update_tracks_pool = np.intersect1d(
@@ -205,37 +206,43 @@ class PureTrackNew(BaseTracker):
             self.tracks_storage.states != TrackState.Tracked)
 
         # Split dets pool to update and reactivate
-        update_dets_pool = dets_matches_pool[np.in1d(tracks_matches_pool,
-                                                     update_tracks_pool)]
-        reactivate_dets_pool = dets_matches_pool[np.in1d(tracks_matches_pool,
-                                                         reactivate_tracks_pool)]
+        update_dets = dets[np.in1d(tracks_matches_pool,
+                                   update_tracks_pool)]
+        reactivate_dets = dets[np.in1d(tracks_matches_pool,
+                                       reactivate_tracks_pool)]
+
+        if embs is not None:
+            update_embs = embs[np.in1d(tracks_matches_pool,
+                                       update_tracks_pool)]
+            reactivate_embs = embs[np.in1d(tracks_matches_pool,
+                                           reactivate_tracks_pool)]
+        else:
+            update_embs = None
+            reactivate_embs = None
 
         # Update, reactivate
-        self.tracks_storage.update(update_tracks_pool,
-                                   self.dets_storage, update_dets_pool,
-                                   self.frame_count, with_reid=update_embs)
+        self.tracks_storage.update(update_tracks_pool, update_dets,
+                                   self.frame_count, update_embs)
 
-        self.tracks_storage.reactivate(reactivate_tracks_pool,
-                                       self.dets_storage, reactivate_dets_pool,
-                                       self.frame_count, with_reid=update_embs)
+        self.tracks_storage.reactivate(reactivate_tracks_pool, reactivate_dets,
+                                       self.frame_count, reactivate_embs)
 
         return update_tracks_pool, reactivate_tracks_pool
 
-    def iou_distance(self, tracks_pool, dets_pool):
+    def iou_distance(self, tracks_pool, dets):
 
-        if len(tracks_pool) == 0 or len(dets_pool) == 0:
-            return np.zeros((len(tracks_pool), 
-                             len(dets_pool)), dtype=np.float32)
+        if len(tracks_pool) == 0 or len(dets) == 0:
+            return np.zeros((len(tracks_pool),
+                             len(dets)), dtype=np.float32)
 
         ious = AssociationFunction.iou_batch(
             xywh2xyxy(self.tracks_storage.means[tracks_pool][:, :4]),
-            xywh2xyxy(self.dets_storage.dets[dets_pool]))
+            dets)
 
         return 1 - ious
 
     @staticmethod
-    def pool_from_matches(tracks_pool: np.ndarray,
-                          dets_pool: np.ndarray,
+    def pool_from_matches(tracks_pool: np.ndarray, dets_pool: np.ndarray,
                           matches: list[tuple[int, int]]):
         if len(matches) == 0:
             return np.empty(0, dtype=int), np.empty(0, dtype=int)
@@ -261,22 +268,16 @@ class PureTrackNew(BaseTracker):
         lost_pool = np.empty(0, dtype=int)
         removed_pool = np.empty(0, dtype=int)
 
-        dets, dets_high, dets_low, embs_high = self._split_detections(dets,
-                                                                      embs)
+        (dets, 
+         dets_high, dets_low, 
+         dets_high_xywh, dets_low_xywh,
+         embs_high) = self._split_detections(dets, embs)
 
         # Extract appearance embeddings
         if self.with_reid and embs is None:
             embs_high = self.reid_model.get_features(dets_high[:, 0:4], img)
         else:
             embs_high = embs_high if embs_high is not None else None
-
-        """Process detections"""
-        dets_high_pool = np.arange(len(dets_high))
-        dets_low_pool = np.arange(len(dets_high),
-                                  len(dets_high) + len(dets_low))
-
-        self.dets_storage.set(dets_high_pool, dets_high, embs_high)
-        self.dets_storage.set(dets_low_pool, dets_low)
 
         """ Add newly detected tracklets to tracked_stracks"""
 
@@ -290,19 +291,20 @@ class PureTrackNew(BaseTracker):
 
         """ Step 2: First association, with high conf detection boxes"""
         tracks_pool = np.union1d(tracked_pool, self.lost_pool)
+        dets_high_pool = np.arange(len(dets_high))
 
         # Predict the current location with KF
         self.tracks_storage.multi_predict(tracks_pool)
 
-        iou_dists = self.iou_distance(tracks_pool, dets_high_pool)
+        iou_dists = self.iou_distance(tracks_pool, dets_high)
 
         iou_dists = fuse_score(
-            iou_dists, self.dets_storage.confs[dets_high_pool])
+            iou_dists, dets_high[:, 4])
 
         if self.with_reid:
             emb_dists = embedding_distance(
                 self.tracks_storage.embs[tracks_pool],
-                self.dets_storage.embs[dets_high_pool]) / 2.0
+                embs_high) / 2.0
 
             emb_dists[emb_dists > self.emb_thresh] = 1.0
             emb_dists[iou_dists > self.iou_thresh] = 1.0
@@ -318,11 +320,11 @@ class PureTrackNew(BaseTracker):
             tracks_pool, dets_high_pool, matches)
 
         unmatched_tracks_pool = tracks_pool[u_tracks]
-        unmatched_dets_high_pool = dets_high_pool[u_dets_high]
+        unmatched_dets_high_pool = dets_high_pool[list(u_dets_high)]
 
         # Update, reactivate
         high_activated_pool, high_reactivated_pool = self.process_matches(
-            tracks_matches_pool, dets_matches_pool, update_embs=self.with_reid)
+            tracks_matches_pool, dets_high_xywh[dets_matches_pool], embs_high[dets_matches_pool])
 
         activated_pool = np.union1d(activated_pool, high_activated_pool)
         reactivated_pool = np.union1d(reactivated_pool, high_reactivated_pool)
@@ -334,7 +336,9 @@ class PureTrackNew(BaseTracker):
             unmatched_tracks_pool,
             self.tracks_storage.states == TrackState.Tracked)
 
-        iou_dists = self.iou_distance(remain_tracks_pool, dets_low_pool)
+        dets_low_pool = np.arange(len(dets_low))
+
+        iou_dists = self.iou_distance(remain_tracks_pool, dets_low)
 
         matches, u_tracks, u_dets_low = linear_assignment(
             iou_dists, thresh=0.5)
@@ -343,11 +347,11 @@ class PureTrackNew(BaseTracker):
             remain_tracks_pool, dets_low_pool, matches)
 
         unmatched_tracks_pool = remain_tracks_pool[u_tracks]
-        unmatched_dets_low_pool = dets_low_pool[u_dets_low]
+        unmatched_dets_low_pool = u_dets_low
 
         # Update, reactivate
         low_activated_pool, low_reactivated_pool = self.process_matches(
-            tracks_matches_pool, dets_matches_pool)
+            tracks_matches_pool, dets_low_xywh[dets_matches_pool])
 
         activated_pool = np.union1d(activated_pool, low_activated_pool)
         reactivated_pool = np.union1d(reactivated_pool, low_reactivated_pool)
@@ -362,10 +366,10 @@ class PureTrackNew(BaseTracker):
         # Unmatched detections from first association (high conf dets)
 
         iou_dists = self.iou_distance(
-            unconfirmed_pool, unmatched_dets_high_pool)
+            unconfirmed_pool, dets_high[unmatched_dets_high_pool])
 
         iou_dists = fuse_score(
-            iou_dists, self.dets_storage.confs[unmatched_dets_high_pool])
+            iou_dists, dets_high[unmatched_dets_high_pool, 4])
 
         matches, u_tracks, u_dets_high = linear_assignment(
             iou_dists, thresh=0.7)
@@ -377,8 +381,8 @@ class PureTrackNew(BaseTracker):
         unmatched_remain_high_dets_pool = unmatched_dets_high_pool[u_dets_high]
 
         self.tracks_storage.update(tracks_matches_pool,
-                                   self.dets_storage, dets_matches_pool,
-                                   self.frame_count, self.with_reid)
+                                   dets_high_xywh[dets_matches_pool],
+                                   self.frame_count, embs[dets_matches_pool])
 
         activated_pool = np.union1d(activated_pool, tracks_matches_pool)
 
@@ -390,11 +394,11 @@ class PureTrackNew(BaseTracker):
 
         dets_to_tracks_pool = np.intersect1d(
             unmatched_remain_high_dets_pool,
-            self.dets_storage.confs >= self.track_new_thresh)
+            np.where(dets_high[:, 4] >= self.track_new_thresh)[0])
 
         new_tracks_pool = self.tracks_storage.activate(
-            self.dets_storage, dets_to_tracks_pool,
-            frame_ids=self.frame_count, with_reid=self.with_reid)
+            dets_high_xywh[dets_to_tracks_pool], self.frame_count,
+            embs_high[dets_to_tracks_pool])
 
         activated_pool = np.union1d(activated_pool, new_tracks_pool)
 

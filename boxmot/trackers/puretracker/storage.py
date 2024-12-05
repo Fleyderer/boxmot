@@ -295,73 +295,57 @@ class TrackStorage:
         self.means[pool] = multi_mean
         self.covs[pool] = multi_covariance
 
-    def set(self, tracks_pool: np.ndarray,
-            dets: np.ndarray, embs: np.ndarray = None):
-        self.dets[tracks_pool] = xyxy2xywh(dets[:, 0:4])
+    def from_dets(self, tracks_pool: np.ndarray,
+                  dets: np.ndarray, embs: np.ndarray = None):
+        self.dets[tracks_pool] = dets[:, 0:4]
         self.confs[tracks_pool] = dets[:, 4]
         self.classes[tracks_pool] = dets[:, 5]
         self.det_ids[tracks_pool] = dets[:, 6]
         if embs is not None:
             self.embs[tracks_pool] = embs
-        self.means[tracks_pool] = np.nan
-        self.covs[tracks_pool] = np.nan
-        self.states[tracks_pool] = TrackState.New
-        self.is_activated_tracks[tracks_pool] = False
-        self.tracklet_lens[tracks_pool] = 0
-        self.frame_ids[tracks_pool] = 0
 
-    def from_dets(self, tracks_pool: np.ndarray,
-                  dets_storage: TrackStorage, dets_pool: np.ndarray,
-                  with_reid: bool):
-        self.dets[tracks_pool] = dets_storage.dets[dets_pool]
-        self.confs[tracks_pool] = dets_storage.confs[dets_pool]
-        self.classes[tracks_pool] = dets_storage.classes[dets_pool]
-        self.det_ids[tracks_pool] = dets_storage.det_ids[dets_pool]
-
-        if with_reid:
-            self.embs[tracks_pool] = dets_storage.embs[dets_pool]
-
-    def update(self, track_pool: np.ndarray,
-               dets_storage: TrackStorage, dets_pool: np.ndarray,
-               frame_ids: int | np.ndarray, with_reid: bool):
-        if track_pool.shape[0] == 0 or dets_pool.shape[0] == 0:
+    def update(self, track_pool: np.ndarray, 
+               dets: np.ndarray, frame_ids: int | np.ndarray,
+               embs: np.ndarray = None,):
+        if track_pool.shape[0] == 0 or dets.shape[0] == 0:
             return
 
         self.frame_ids[track_pool] = frame_ids
         self.tracklet_lens[track_pool] += 1
+        
         means, covs = list(zip(*[
             self.kalman_filter.update(
                 self.means[track_pool][i],
                 self.covs[track_pool][i],
-                dets_storage.dets[dets_pool][i])
+                dets[i][:4])
             for i in range(len(track_pool))]))
 
         self.means[track_pool] = np.array(means)
         self.covs[track_pool] = np.array(covs)
 
-        if with_reid:
+        if embs is not None:
             self.embs[track_pool] = EmbeddingHandler.update(
-                self.embs[track_pool], dets_storage.embs[dets_pool])
+                self.embs[track_pool], embs)
 
-        self.confs[track_pool] = dets_storage.confs[dets_pool]
-        self.classes[track_pool] = dets_storage.classes[dets_pool]
-        self.det_ids[track_pool] = dets_storage.det_ids[dets_pool]
+        self.confs[track_pool] = dets[:, 4]
+        self.classes[track_pool] = dets[:, 5]
+        self.det_ids[track_pool] = dets[:, 6]
         self.is_activated_tracks[track_pool] = True
 
-    def activate(self, dets_storage: TrackStorage, dets_pool: np.ndarray,
-                 frame_ids: int | np.ndarray, with_reid: bool):
+    def activate(self, dets: np.ndarray,
+                 frame_ids: int | np.ndarray, embs: np.ndarray = None):
         """Start a new tracklet"""
-        if dets_pool.shape[0] == 0:
-            return dets_pool
+        if dets.shape[0] == 0:
+            return dets
 
         start_id = self._manager.get_max_id() + 1
-        tracks_pool = range(start_id, start_id + dets_pool.shape[0])
+        tracks_pool = range(start_id, start_id + dets.shape[0])
 
-        self.from_dets(tracks_pool, dets_storage, dets_pool, with_reid)
+        self.from_dets(tracks_pool, dets, embs)
 
         means, covs = list(zip(*[
-            self.kalman_filter.initiate(dets_storage.dets[dets_pool][i])
-            for i in range(len(dets_pool))]))
+            self.kalman_filter.initiate(dets[i][:4])
+            for i in range(len(dets))]))
 
         self.means[tracks_pool] = np.array(means)
         self.covs[tracks_pool] = np.array(covs)
@@ -377,16 +361,16 @@ class TrackStorage:
         return tracks_pool
 
     def reactivate(self, track_pool: np.ndarray,
-                   dets_storage: TrackStorage, dets_pool: np.ndarray,
-                   frame_ids: int | np.ndarray, with_reid: bool):
-        if track_pool.shape[0] == 0 or dets_pool.shape[0] == 0:
+                   dets: np.ndarray,
+                   frame_ids: int | np.ndarray, embs: np.ndarray = None):
+        if track_pool.shape[0] == 0 or dets.shape[0] == 0:
             return
 
         means, covs = list(zip(*[
             self.kalman_filter.update(
                 self.means[track_pool][i],
                 self.covs[track_pool][i],
-                dets_storage.dets[dets_pool][i])
+                dets[i][:4])
             for i in range(len(track_pool))]))
 
         self.means[track_pool] = np.array(means)
@@ -402,9 +386,9 @@ class TrackStorage:
         # if with_reid:
         #     self.embs[track_pool] = dets_storage.embs[dets_pool]
 
-        self.confs[track_pool] = dets_storage.confs[dets_pool]
-        self.classes[track_pool] = dets_storage.classes[dets_pool]
-        self.det_ids[track_pool] = dets_storage.det_ids[dets_pool]
+        self.confs[track_pool] = dets[:, 4]
+        self.classes[track_pool] = dets[:, 5]
+        self.det_ids[track_pool] = dets[:, 6]
 
     def cleanup(self, save_pool):
         self._manager.cleanup(save_pool)
