@@ -36,6 +36,7 @@ class EmbeddingHandler:
 
         return embs
 
+
 class TrackState:
     New = 0
     Tracked = 1
@@ -231,19 +232,14 @@ class TrackStorage:
     embs: np.ndarray[float] = TrackStorageProperty('embs')
     emb_handler: EmbeddingHandler = None
     kalman_filter = KalmanFilterXYWH()
-    
+
     # TODO: Find where it is used and change values
     max_obs: int = None
     states: np.ndarray[int] = TrackStorageProperty('states')
     is_activated_tracks: np.ndarray[bool] = TrackStorageProperty(
         'is_activated_tracks')
-    tracklet_lens: np.ndarray[int] = TrackStorageProperty('tracklet_lens')
     frame_ids = TrackStorageProperty('frame_ids')
     start_frames = TrackStorageProperty('start_frames')
-
-    # TODO: Check if this is the correct type or maybe remove prop completely
-    # history_observations: np.ndarray[float] = TrackStorageProperty(
-    #     'history_observations')
 
     def __init__(self, size: int, auto_increase: bool = False):
         self._data_dict = {}
@@ -304,15 +300,14 @@ class TrackStorage:
         if embs is not None:
             self.embs[tracks_pool] = embs
 
-    def update(self, track_pool: np.ndarray, 
+    def update(self, track_pool: np.ndarray,
                dets: np.ndarray, frame_ids: int | np.ndarray,
                embs: np.ndarray = None,):
         if track_pool.shape[0] == 0 or dets.shape[0] == 0:
             return
 
         self.frame_ids[track_pool] = frame_ids
-        self.tracklet_lens[track_pool] += 1
-        
+
         means, covs = list(zip(*[
             self.kalman_filter.update(
                 self.means[track_pool][i],
@@ -351,7 +346,6 @@ class TrackStorage:
         self.covs[tracks_pool] = np.array(covs)
 
         self.frame_ids[tracks_pool] = frame_ids
-        self.tracklet_lens[tracks_pool] = 0
         self.states[tracks_pool] = TrackState.Tracked
         self.start_frames[tracks_pool] = frame_ids
 
@@ -377,7 +371,6 @@ class TrackStorage:
         self.covs[track_pool] = np.array(covs)
 
         self.frame_ids[track_pool] = frame_ids
-        self.tracklet_lens[track_pool] = 0
         self.states[track_pool] = TrackState.Tracked
         self.is_activated_tracks[track_pool] = True
 
@@ -392,4 +385,3 @@ class TrackStorage:
 
     def cleanup(self, save_pool):
         self._manager.cleanup(save_pool)
-

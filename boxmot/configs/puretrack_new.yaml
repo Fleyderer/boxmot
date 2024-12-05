@@ -30,7 +30,7 @@ frame_rate:
   
 with_reid:
   type: choice
-  default: False  # from the default parameters
+  default: True  # from the default parameters
   options: [False, True]
   
 emb_mode:
