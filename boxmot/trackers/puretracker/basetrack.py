@@ -47,35 +47,6 @@ class ClassStorage:
         return int(self._cls_value)
 
 
-class EmbeddingHandler:
-    _mode = None
-    _ema_alpha = None
-    _max_len = None
-
-    def update(self, prev_embs: np.ndarray, new_embs: np.ndarray):
-        """
-        Update embeddings
-
-        Parameters:
-        ---------------
-        prev_embs: np.ndarray
-            Previous embeddings of shape [N, D], where 
-            N - number of embeddings
-            D - embedding shape
-        new_embs: np.ndarray
-            New embeddings of shape [N, D]
-        """
-        
-        new_embs / np.linalg.norm(new_embs, axis=1)[:, np.newaxis]
-
-        if self._mode == "ema":
-            embs = (prev_embs * self._ema_alpha + 
-                    new_embs * (1 - self._ema_alpha))
-        elif self._mode == "last":
-            embs = new_embs
-
-        return embs
-
 class TrackState(object):
     New = 0
     Tracked = 1

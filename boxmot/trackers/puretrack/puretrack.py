@@ -301,6 +301,9 @@ class PureTrack(BaseTracker):
         else:
             detections = []
 
+        # DEBUG
+        dets_check = get_tracks(detections)
+
         """ Add newly detected tracklets to tracked_stracks"""
         # active tracks, but not activated yet
         unconfirmed: list[STrack] = []
@@ -312,6 +315,10 @@ class PureTrack(BaseTracker):
             else:
                 tracked_stracks.append(track)
 
+        # DEBUG
+        unconf_check = get_tracks(unconfirmed)
+        tracked_check = get_tracks(tracked_stracks)
+
         """ Step 2: First association, with high conf detection boxes"""
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
         # Predict the current location with KF
@@ -320,6 +327,9 @@ class PureTrack(BaseTracker):
         # if not self.args.mot20:
         iou_dists = fuse_score(iou_dists, detections)
 
+        # DEBUG
+        strack_pool_check = get_tracks(strack_pool)
+
         if self.with_reid:
             emb_dists = embedding_distance_fast(strack_pool, detections) / 2.0
             emb_dists[emb_dists > self.emb_thresh] = 1.0
@@ -327,6 +337,7 @@ class PureTrack(BaseTracker):
             dists = np.minimum(iou_dists, emb_dists)
         else:
             dists = iou_dists
+
 
         # Matches, unmatched tracks, unmatched detections
         matches, u_track, u_detection = linear_assignment(
@@ -342,6 +353,10 @@ class PureTrack(BaseTracker):
             else:
                 track.re_activate(det, self.frame_count, new_id=False)
                 refind_stracks.append(track)
+
+        # DEBUG
+        activated_check = get_tracks(activated_stracks)
+        refind_check = get_tracks(refind_stracks)
 
         """ Step 3: Second association, with low conf detection boxes"""
         # association the untrack to the low conf detections
@@ -422,10 +437,7 @@ class PureTrack(BaseTracker):
         self.removed_stracks = [
             track for track in self.removed_stracks
             if self.frame_count - track.end_frame < 10 * self.max_time_lost]
-
-        # Count all tracks
-        print(len(self.active_tracks) +
-              len(self.lost_stracks) + len(self.removed_stracks))
+        
 
         self.active_tracks, self.lost_stracks = remove_duplicate_stracks(
             self.active_tracks, self.lost_stracks
@@ -485,3 +497,15 @@ def remove_duplicate_stracks(stracksa, stracksb):
     resa = [t for i, t in enumerate(stracksa) if i not in dupa]
     resb = [t for i, t in enumerate(stracksb) if i not in dupb]
     return resa, resb
+
+def get_tracks(tracks: list[STrack]):
+    res_tracks = []
+    for track in tracks:
+        if hasattr(track, "id"):
+            res_tracks.append([*track.xyxy, track.id, track.conf, track.cls])
+        else:
+            res_tracks.append([*track.xyxy, -1, track.conf, track.cls])
+    return res_tracks
+
+def get_ids(tracks: list[STrack]):
+    return [track.id for track in tracks]
