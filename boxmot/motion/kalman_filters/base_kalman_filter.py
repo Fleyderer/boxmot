@@ -1,6 +1,9 @@
+
 import numpy as np
+import jax.numpy as jnp
 import scipy.linalg
 from typing import Tuple
+
 
 """
 Table for the 0.95 quantile of the chi-square distribution with N degrees of
@@ -49,8 +52,54 @@ class BaseKalmanFilter:
         std = self._get_initial_covariance_std(measurement)
         covariance = np.diag(np.square(std))
         return mean, covariance
+    
+    def multi_initiate(self, measurements: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Create tracks from multiple unassociated measurements in a vectorized manner.
+
+        Parameters:
+        measurements (np.ndarray): A 2D array where each row is a measurement.
+
+        Returns:
+        Tuple[np.ndarray, np.ndarray]: A tuple containing the means and covariances for each measurement.
+        """
+        num_measurements = measurements.shape[0]
+        mean_pos = measurements
+        mean_vel = np.zeros_like(mean_pos)
+        mean = np.hstack((mean_pos, mean_vel))
+
+        std = self._get_initial_covariances_std(measurements)
+        std_squared = np.square(std)
+        covariance = np.zeros((num_measurements, 2 * self.ndim, 2 * self.ndim))
+
+        # Fill the diagonal elements for each covariance matrix
+        diag_indices = np.arange(2 * self.ndim)
+        covariance[:, diag_indices, diag_indices] = std_squared
+
+        return mean, covariance
 
     def _get_initial_covariance_std(self, measurement: np.ndarray) -> np.ndarray:
+        """
+        Return initial standard deviations for the covariance matrix.
+        Should be implemented by subclasses.
+        """
+        raise NotImplementedError
+    
+    def _get_measurement_noise_std(self, mean: np.ndarray, confidence: float = 0.0) -> np.ndarray:
+        """
+        Return standard deviations for measurement noise.
+        Should be implemented by subclasses.
+        """
+        raise NotImplementedError
+    
+    def _get_measurement_noises_std(self, means: np.ndarray, confidence: float = 0.0) -> np.ndarray:
+        """
+        Return standard deviations for measurement noise in vectorized form.
+        Should be implemented by subclasses.
+        """
+        raise NotImplementedError
+    
+    def _get_initial_covariances_std(self, measurements: np.ndarray) -> np.ndarray:
         """
         Return initial standard deviations for the covariance matrix.
         Should be implemented by subclasses.
@@ -128,6 +177,42 @@ class BaseKalmanFilter:
         new_mean = mean + np.dot(innovation, kalman_gain.T)
         new_covariance = covariance - np.linalg.multi_dot((kalman_gain, projected_cov, kalman_gain.T))
         return new_mean, new_covariance
+    
+    def multi_project(self, means: np.ndarray, covariances: np.ndarray, confidence: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
+        stds = self._get_measurement_noises_std(means, confidence)
+        stds = (1 - confidence) * stds
+
+        innovation_covs = np.array([np.diag(np.square(std)) for std in stds])
+
+        projected_means = np.dot(means, self._update_mat.T)
+        projected_covs = np.array([
+            np.linalg.multi_dot((self._update_mat, cov, self._update_mat.T))
+            for cov in covariances
+        ])
+
+        return projected_means, projected_covs + innovation_covs
+
+    def multi_update(self, means: np.ndarray, covariances: np.ndarray, measurements: np.ndarray, confidence: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
+        projected_means, projected_covs = self.multi_project(means, covariances, confidence)
+
+        kalman_gains = np.array([
+            scipy.linalg.cho_solve(
+                scipy.linalg.cho_factor(projected_cov, lower=True, check_finite=False),
+                np.dot(cov, self._update_mat.T).T,
+                check_finite=False
+            ).T
+            for cov, projected_cov in zip(covariances, projected_covs)
+        ])
+
+        innovations = measurements - projected_means
+
+        new_means = means + np.einsum('ijk,ik->ij', kalman_gains, innovations)
+        new_covariances = np.array([
+            cov - np.linalg.multi_dot((kalman_gain, projected_cov, kalman_gain.T))
+            for cov, kalman_gain, projected_cov in zip(covariances, kalman_gains, projected_covs)
+        ])
+
+        return new_means, new_covariances
 
     def _get_multi_process_noise_std(self, mean: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """

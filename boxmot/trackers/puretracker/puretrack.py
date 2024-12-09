@@ -1,105 +1,15 @@
-# Mikel Broström 🔥 Yolo Tracking 🧾 AGPL-3.0 license
-
 from __future__ import annotations
-from collections import deque
-from typing import Literal
 from pathlib import Path
 
-import lap
 import numpy as np
 import torch
-from scipy.spatial.distance import cdist
-from fastdist import fastdist
 
 from boxmot.appearance.reid_auto_backend import ReidAutoBackend
 from boxmot.trackers.puretracker.storage import TrackState, TrackStorage, EmbeddingHandler
-from boxmot.utils.iou import AssociationFunction
+from boxmot.trackers.puretracker.utils import (
+    xywh2xyxy, xyxy2xywh, linear_assignment,
+    embedding_distance, fuse_score, iou_batch_xywh)
 from boxmot.trackers.basetracker import BaseTracker
-
-
-def linear_assignment(cost_matrix, thresh):
-    if cost_matrix.size == 0:
-        return (
-            np.empty((0, 2), dtype=int),
-            list(range(cost_matrix.shape[0])),
-            list(range(cost_matrix.shape[1])),
-        )
-    matches, unmatched_a, unmatched_b = [], [], []
-    cost, x, y = lap.lapjv(cost_matrix, extend_cost=True, cost_limit=thresh)
-    for ix, mx in enumerate(x):
-        if mx >= 0:
-            matches.append([ix, mx])
-    unmatched_a = np.where(x < 0)[0]
-    unmatched_b = np.where(y < 0)[0]
-    matches = np.asarray(matches)
-    return matches, unmatched_a, unmatched_b
-
-# TODO: maybe do it only once when creating
-
-
-def xywh2xyxy(x: np.ndarray | torch.Tensor):
-    """
-    Convert bounding box coordinates from (x_c, y_c, width, height) format to
-    (x1, y1, x2, y2) format where (x1, y1) is the top-left corner and (x2, y2)
-    is the bottom-right corner.
-
-    Args:
-        x (np.ndarray) or (torch.Tensor): The input bounding box coordinates in (x, y, width, height) format.
-    Returns:
-        y (np.ndarray) or (torch.Tensor): The bounding box coordinates in (x1, y1, x2, y2) format.
-    """
-    if x.shape[0] == 0:
-        return x
-
-    y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
-    y[..., 0] = x[..., 0] - x[..., 2] / 2  # top left x
-    y[..., 1] = x[..., 1] - x[..., 3] / 2  # top left y
-    y[..., 2] = x[..., 0] + x[..., 2] / 2  # bottom right x
-    y[..., 3] = x[..., 1] + x[..., 3] / 2  # bottom right y
-    return y
-
-
-def xyxy2xywh(x):
-    """
-    Convert bounding box coordinates from (x1, y1, x2, y2) format to (x, y, width, height) format.
-
-    Args:
-        x (np.ndarray) or (torch.Tensor): The input bounding box coordinates in (x1, y1, x2, y2) format.
-    Returns:
-       y (np.ndarray) or (torch.Tensor): The bounding box coordinates in (x, y, width, height) format.
-    """
-    if x.shape[0] == 0:
-        return x
-
-    y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
-    y[..., 0] = (x[..., 0] + x[..., 2]) / 2  # x center
-    y[..., 1] = (x[..., 1] + x[..., 3]) / 2  # y center
-    y[..., 2] = x[..., 2] - x[..., 0]  # width
-    y[..., 3] = x[..., 3] - x[..., 1]  # height
-    return y
-
-
-def embedding_distance(tracks_embs: np.ndarray, dets_embs: np.ndarray):
-    cost_matrix = np.zeros(
-        (len(tracks_embs), len(dets_embs)), dtype=np.float32)
-    if cost_matrix.size == 0:
-        return cost_matrix
-    cost_matrix = np.maximum(
-        0.0, cdist(tracks_embs, dets_embs, metric="cosine")
-    )  # Nomalized features
-
-    return cost_matrix
-
-
-def fuse_score(cost_matrix: np.ndarray, confs: np.ndarray):
-    if cost_matrix.size == 0:
-        return cost_matrix
-
-    confs = np.expand_dims(confs, axis=0).repeat(cost_matrix.shape[0], axis=0)
-    iou_sim = 1 - cost_matrix
-    fuse_sim = iou_sim * confs
-    fuse_cost = 1 - fuse_sim
-    return fuse_cost
 
 
 class PureTrackNew(BaseTracker):
@@ -125,7 +35,6 @@ class PureTrackNew(BaseTracker):
         track_new_thresh: float,
         match_thresh: float,
 
-        dets_storage_size: int,
         tracks_storage_size: int,
         track_buffer: int,
         frame_rate: int = 30,
@@ -173,24 +82,19 @@ class PureTrackNew(BaseTracker):
         self.iou_thresh = iou_thresh
         self.emb_thresh = emb_thresh
 
-    def _split_detections(self, dets: np.ndarray, embs: np.ndarray):
+    def _split_dets(self, dets: np.ndarray, embs: np.ndarray):
         dets = np.hstack((dets, np.arange(len(dets)).reshape(-1, 1)))
-        dets_xywh = dets.copy()
-        dets_xywh[:, :4] = xyxy2xywh(dets_xywh[:, :4])
+        dets[:, :4] = xyxy2xywh(dets[:, :4])
         confs = dets[:, 4]
-        inds_first = confs > self.track_high_thresh
 
-        inds_higher_low = confs > self.track_low_thresh
-        inds_lower_high = confs < self.track_high_thresh
-        inds_second = np.logical_and(inds_higher_low, inds_lower_high)
+        inds_high = confs > self.track_high_thresh
+        inds_low = (confs > self.track_low_thresh) & (confs <= self.track_high_thresh)
 
-        dets_high = dets[inds_first]
-        dets_low = dets[inds_second]
-        dets_high_xywh = dets_xywh[inds_first]
-        dets_low_xywh = dets_xywh[inds_second]
-        embs_high = embs[inds_first] if embs is not None else None
+        dets_high = dets[inds_high]
+        dets_low = dets[inds_low]
+        embs_high = embs[inds_high] if embs is not None else None
 
-        return dets, dets_high, dets_low, dets_high_xywh, dets_low_xywh, embs_high
+        return dets, dets_high, dets_low, embs_high
 
     def process_matches(self,
                         tracks_matches_pool: np.ndarray,
@@ -235,9 +139,8 @@ class PureTrackNew(BaseTracker):
             return np.zeros((len(tracks_pool),
                              len(dets)), dtype=np.float32)
 
-        ious = AssociationFunction.iou_batch(
-            xywh2xyxy(self.tracks_storage.means[tracks_pool][:, :4]),
-            dets)
+        ious = iou_batch_xywh(self.tracks_storage.means[tracks_pool][:, :4],
+                              dets)
 
         return 1 - ious
 
@@ -258,9 +161,7 @@ class PureTrackNew(BaseTracker):
                dets: np.ndarray,
                img: np.ndarray = None,
                embs: np.ndarray = None) -> np.ndarray:
-
         self.check_inputs(dets, img)
-
         self.frame_count += 1
 
         activated_pool = np.empty(0, dtype=int)
@@ -268,10 +169,7 @@ class PureTrackNew(BaseTracker):
         lost_pool = np.empty(0, dtype=int)
         removed_pool = np.empty(0, dtype=int)
 
-        (dets, 
-         dets_high, dets_low, 
-         dets_high_xywh, dets_low_xywh,
-         embs_high) = self._split_detections(dets, embs)
+        dets, dets_high, dets_low, embs_high = self._split_dets(dets, embs)
 
         # Extract appearance embeddings
         if self.with_reid and embs is None:
@@ -324,7 +222,7 @@ class PureTrackNew(BaseTracker):
 
         # Update, reactivate
         high_activated_pool, high_reactivated_pool = self.process_matches(
-            tracks_matches_pool, dets_high_xywh[dets_matches_pool], embs_high[dets_matches_pool])
+            tracks_matches_pool, dets_high[dets_matches_pool], embs_high[dets_matches_pool])
 
         activated_pool = np.union1d(activated_pool, high_activated_pool)
         reactivated_pool = np.union1d(reactivated_pool, high_reactivated_pool)
@@ -351,7 +249,7 @@ class PureTrackNew(BaseTracker):
 
         # Update, reactivate
         low_activated_pool, low_reactivated_pool = self.process_matches(
-            tracks_matches_pool, dets_low_xywh[dets_matches_pool])
+            tracks_matches_pool, dets_low[dets_matches_pool])
 
         activated_pool = np.union1d(activated_pool, low_activated_pool)
         reactivated_pool = np.union1d(reactivated_pool, low_reactivated_pool)
@@ -364,12 +262,13 @@ class PureTrackNew(BaseTracker):
 
         """Deal with unconfirmed tracks, usually tracks with only one beginning frame"""
         # Unmatched detections from first association (high conf dets)
+        dets_high_unmatched = dets_high[unmatched_dets_high_pool]
 
         iou_dists = self.iou_distance(
-            unconfirmed_pool, dets_high[unmatched_dets_high_pool])
+            unconfirmed_pool, dets_high_unmatched)
 
         iou_dists = fuse_score(
-            iou_dists, dets_high[unmatched_dets_high_pool, 4])
+            iou_dists, dets_high_unmatched[:, 4])
 
         matches, u_tracks, u_dets_high = linear_assignment(
             iou_dists, thresh=0.7)
@@ -381,7 +280,7 @@ class PureTrackNew(BaseTracker):
         unmatched_remain_high_dets_pool = unmatched_dets_high_pool[u_dets_high]
 
         self.tracks_storage.update(tracks_matches_pool,
-                                   dets_high_xywh[dets_matches_pool],
+                                   dets_high[dets_matches_pool],
                                    self.frame_count, embs[dets_matches_pool])
 
         activated_pool = np.union1d(activated_pool, tracks_matches_pool)
@@ -397,7 +296,7 @@ class PureTrackNew(BaseTracker):
             np.where(dets_high[:, 4] >= self.track_new_thresh)[0])
 
         new_tracks_pool = self.tracks_storage.activate(
-            dets_high_xywh[dets_to_tracks_pool], self.frame_count,
+            dets_high[dets_to_tracks_pool], self.frame_count,
             embs_high[dets_to_tracks_pool])
 
         activated_pool = np.union1d(activated_pool, new_tracks_pool)
@@ -421,20 +320,21 @@ class PureTrackNew(BaseTracker):
         self.lost_pool = np.union1d(self.lost_pool, lost_pool)
         self.lost_pool = np.setdiff1d(self.lost_pool, self.removed_pool)
 
-        self.removed_pool = np.union1d(self.removed_pool, removed_pool)
-
         self.active_pool, self.lost_pool = self.remove_duplicates(
             self.active_pool, self.lost_pool
         )
 
         # Clean up removed tracks
-        if self.frame_count % self.buffer_size == 0:
+        if self.frame_count % self.max_time_lost == 0:
             save_pool = np.union1d(self.active_pool, self.lost_pool)
             self.tracks_storage.cleanup(save_pool)
             self.removed_pool = np.intersect1d(self.removed_pool, save_pool)
 
+        self.removed_pool = np.union1d(self.removed_pool, removed_pool)
+
         output_pool = np.intersect1d(
             self.active_pool, self.tracks_storage.is_activated_tracks == True)
+        
 
         xyxys = xywh2xyxy(self.tracks_storage.means[output_pool][:, :4])
         ids = output_pool.reshape(-1, 1)
@@ -447,13 +347,25 @@ class PureTrackNew(BaseTracker):
         return outputs
 
     def remove_duplicates(self, tracksa_pool, tracksb_pool):
-        pdist = 1 - AssociationFunction.iou_batch(
-            xywh2xyxy(self.tracks_storage.means[tracksa_pool][:, :4]),
-            xywh2xyxy(self.tracks_storage.means[tracksb_pool][:, :4]),
+        """
+        Function to remove duplicate tracks, 
+        based on their IoU closeness and track duration (longer track wins)
+
+        Args:
+            tracksa_pool (np.ndarray): Pool of tracks to be compared
+            tracksb_pool (np.ndarray): Pool of tracks to be compared
+
+        Returns:
+            tuple: Pools of tracks after duplicates removal
+        """
+        pdist = 1 - iou_batch_xywh(
+            self.tracks_storage.means[tracksa_pool][:, :4],
+            self.tracks_storage.means[tracksb_pool][:, :4],
         )
 
         tracksa_dup, tracksb_dup = np.where(pdist < 0.15)
 
+        # Found duplicates
         tracksa_dup_pool = tracksa_pool[tracksa_dup]
         tracksb_dup_pool = tracksb_pool[tracksb_dup]
 
@@ -462,8 +374,7 @@ class PureTrackNew(BaseTracker):
         timesb = self.tracks_storage.frame_ids[tracksb_dup_pool] - \
             self.tracks_storage.start_frames[tracksb_dup_pool]
 
-        # Continue from here --->
-
+        # Filter out duplicates, which exists less time
         finala_pool = np.setdiff1d(tracksa_pool,
                                    tracksa_dup_pool[timesa < timesb])
         finalb_pool = np.setdiff1d(tracksb_pool,

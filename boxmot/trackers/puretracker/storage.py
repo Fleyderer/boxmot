@@ -47,6 +47,8 @@ class TrackState:
 class TrackStorageManager:
     """
     Class to manage storage for tracks
+
+    Main functionality is to map track IDs to storage positions
     """
 
     def __init__(self, size: int):
@@ -152,10 +154,12 @@ class TrackStoragePropertyAccessor:
                     ) -> Union[Any, np.ndarray]:
         st_indices = self.storage.translate_track_ids(track_ids)
 
-        if self.property_name not in self.storage._data_dict:
+        property_data = self.storage._data_dict.get(self.property_name)
+
+        if property_data is None:
             return np.array([])
 
-        return self.storage._data_dict[self.property_name][st_indices]
+        return property_data[st_indices]
 
     def __setitem__(self,
                     track_ids: Union[int, List[int]],
@@ -223,7 +227,7 @@ class TrackStoragePropertyAccessor:
 
 
 class TrackStorage:
-    dets: np.ndarray[float] = TrackStorageProperty('dets')  # xcycwh
+    boxes: np.ndarray[float] = TrackStorageProperty('boxes')  # xcycwh
     confs: np.ndarray[float] = TrackStorageProperty('confs')
     classes: np.ndarray[int] = TrackStorageProperty('classes')
     det_ids: np.ndarray[int] = TrackStorageProperty('det_ids')
@@ -293,7 +297,7 @@ class TrackStorage:
 
     def from_dets(self, tracks_pool: np.ndarray,
                   dets: np.ndarray, embs: np.ndarray = None):
-        self.dets[tracks_pool] = dets[:, 0:4]
+        self.boxes[tracks_pool] = dets[:, 0:4]
         self.confs[tracks_pool] = dets[:, 4]
         self.classes[tracks_pool] = dets[:, 5]
         self.det_ids[tracks_pool] = dets[:, 6]
@@ -308,12 +312,17 @@ class TrackStorage:
 
         self.frame_ids[track_pool] = frame_ids
 
-        means, covs = list(zip(*[
-            self.kalman_filter.update(
-                self.means[track_pool][i],
-                self.covs[track_pool][i],
-                dets[i][:4])
-            for i in range(len(track_pool))]))
+        # means, covs = list(zip(*[
+        #     self.kalman_filter.update(
+        #         self.means[track_pool][i],
+        #         self.covs[track_pool][i],
+        #         dets[i][:4])
+        #     for i in range(len(track_pool))]))
+
+        means, covs = self.kalman_filter.multi_update(
+            self.means[track_pool],
+            self.covs[track_pool],
+            dets[:, :4])
 
         self.means[track_pool] = np.array(means)
         self.covs[track_pool] = np.array(covs)
@@ -334,13 +343,15 @@ class TrackStorage:
             return dets
 
         start_id = self._manager.get_max_id() + 1
-        tracks_pool = range(start_id, start_id + dets.shape[0])
+        tracks_pool = np.arange(start_id, start_id + dets.shape[0])
 
         self.from_dets(tracks_pool, dets, embs)
 
-        means, covs = list(zip(*[
-            self.kalman_filter.initiate(dets[i][:4])
-            for i in range(len(dets))]))
+        # means, covs = list(zip(*[
+        #     self.kalman_filter.initiate(dets[i][:4])
+        #     for i in range(len(dets))]))
+        
+        means, covs = self.kalman_filter.multi_initiate(dets[:, :4])
 
         self.means[tracks_pool] = np.array(means)
         self.covs[tracks_pool] = np.array(covs)
@@ -374,10 +385,7 @@ class TrackStorage:
         self.states[track_pool] = TrackState.Tracked
         self.is_activated_tracks[track_pool] = True
 
-        # TODO: check if embeddings is being updated too
-        # TODO: Check how embedding should be updated, is there any EMA?
-        # if with_reid:
-        #     self.embs[track_pool] = dets_storage.embs[dets_pool]
+        # TODO: Maybe update embs, check if it helps to metrices
 
         self.confs[track_pool] = dets[:, 4]
         self.classes[track_pool] = dets[:, 5]

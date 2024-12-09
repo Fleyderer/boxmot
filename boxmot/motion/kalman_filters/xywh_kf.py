@@ -23,6 +23,12 @@ class KalmanFilterXYWH(BaseKalmanFilter):
             10 * self._std_weight_velocity * measurement[2],
             10 * self._std_weight_velocity * measurement[3]
         ]
+    
+    def _get_initial_covariances_std(self, measurements):
+        std_pos = 2 * self._std_weight_position * measurements[:, [2, 3, 2, 3]]
+        std_vel = 10 * self._std_weight_velocity * measurements[:, [2, 3, 2, 3]]
+        std = np.hstack((std_pos, std_vel))
+        return std
 
     def _get_process_noise_std(self, mean: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         std_pos = [
@@ -46,6 +52,15 @@ class KalmanFilterXYWH(BaseKalmanFilter):
             self._std_weight_position * mean[2],
             self._std_weight_position * mean[3]
         ]
+        return std_noise
+    
+    def _get_measurement_noises_std(self, means: np.ndarray, confidence: float) -> np.ndarray:
+        std_noise = np.array([
+            self._std_weight_position * means[:, 2],
+            self._std_weight_position * means[:, 3],
+            self._std_weight_position * means[:, 2],
+            self._std_weight_position * means[:, 3]
+        ]).T
         return std_noise
     
     def _get_multi_process_noise_std(self, mean: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
