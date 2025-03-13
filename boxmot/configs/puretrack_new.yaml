@@ -1,0 +1,80 @@
+track_high_thresh:
+  type: uniform
+  default: 0.6  # from the default parameters
+  range: [0.4, 0.6]
+  
+track_low_thresh:
+  type: uniform
+  default: 0.1  # from the default parameters
+  range: [0.1, 0.3]
+  
+track_new_thresh:
+  type: uniform
+  default: 0.6  # from the default parameters
+  range: [0.4, 0.6]
+  
+match_thresh:
+  type: uniform
+  default: 0.9  # from the default parameters
+  range: [0.7, 0.9]
+  
+iou_dist_risky_thresh:
+  type: uniform
+  default: 0.0
+  range: [0.7, 0.9]
+  
+ars_thresh:
+  type: uniform
+  default: 0.6
+  range: [0.4, 0.7]
+
+max_time_lost:
+  type: uniform
+  default: 1.2
+  range: [1.0, 5.0]
+
+max_time_reidable:
+  type: uniform
+  default: 5.0
+  range: [3.0, 10.0]
+
+frame_rate:
+  type: choice
+  default: 30  # from the default parameters
+  choices: [30]  # static choice for Ray Search
+
+with_reid:
+  type: choice
+  default: True # from the default parameters
+  options: [False, True]
+
+with_ecc:
+  type: choice
+  default: False # from the default parameters
+  options: [False, True]
+  
+with_emb_reactivation:
+  type: choice
+  default: True # from the default parameters
+  options: [False, True]
+
+emb_mode:
+  type: choice
+  default: ema  # from the default parameters
+  options: [ema, last]
+  
+emb_ema_alpha:
+  type: uniform
+  default: 0.9  # from the default parameters
+  range: [0.5, 0.9]
+  
+emb_max_count:
+  type: randint
+  default: 30  # from the default parameters
+  range: [10, 31, 10]  # step size of 10, upper bound exclusive
+
+tracks_storage_size:
+  type: choice
+  default: 128  # from the default parameters
+  range: [128]  # step size of 10, upper bound exclusive
+
