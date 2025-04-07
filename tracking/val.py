@@ -286,6 +286,9 @@ def generate_mot_results(args: argparse.Namespace, config_dict: dict = None) -> 
     else:
         all_mot_results = np.empty((0, 0))
 
+    if args.postprocess:
+        all_mot_results = tracker.postprocess(all_mot_results)
+
     write_mot_results(txt_path, all_mot_results)
 
 
@@ -463,6 +466,7 @@ def parse_opt() -> argparse.Namespace:
     parser.add_argument('--dets-file-path', type=Path, help='path to detections file')
     parser.add_argument('--embs-file-path', type=Path, help='path to embeddings file')
     parser.add_argument('--exp-folder-path', type=Path, help='path to experiment folder')
+    parser.add_argument('--postprocess', action='store_true', help='apply postprocess to tracking results')
     parser.add_argument('--verbose', action='store_true', help='print results')
     parser.add_argument('--agnostic-nms', default=False, action='store_true', help='class-agnostic NMS')
     parser.add_argument('--n-trials', type=int, default=4, help='nr of trials for evolution')

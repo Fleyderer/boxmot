@@ -85,7 +85,7 @@ def run(args):
         classes=args.classes,
         imgsz=args.imgsz,
         vid_stride=args.vid_stride,
-        line_width=args.line_width
+        line_width=args.line_width 
     )
 
     yolo.add_callback('on_predict_start', partial(on_predict_start, persist=True))
@@ -110,7 +110,9 @@ def run(args):
 
     # store custom args in predictor
     yolo.predictor.custom_args = args
-
+    
+    video_output = None
+    video_writer = None
     for r in results:
 
         img = yolo.predictor.trackers[0].plot_results(r.orig_img, args.show_trajectories)
@@ -120,6 +122,19 @@ def run(args):
             key = cv2.waitKey(1) & 0xFF
             if key == ord(' ') or key == ord('q'):
                 break
+
+        if args.save is True:
+            if video_output is None:
+                video_output = Path(r.save_dir) / "output.avi" if video_output is None else video_output
+                height, width = img.shape[:2]
+                fps = 30
+                fourcc = cv2.VideoWriter_fourcc(*"XVID")
+                video_writer = cv2.VideoWriter(video_output, fourcc, fps, (width, height))
+
+            video_writer.write(img)
+
+    if video_writer is not None:
+        video_writer.release()
 
 
 def parse_opt():
@@ -135,7 +150,7 @@ def parse_opt():
                         help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=None,
                         help='inference size h,w')
-    parser.add_argument('--conf', type=float, default=0.5,
+    parser.add_argument('--conf', type=float, default=0.01,
                         help='confidence threshold')
     parser.add_argument('--iou', type=float, default=0.7,
                         help='intersection over union (IoU) threshold for NMS')
