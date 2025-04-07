@@ -5,7 +5,7 @@ from boxmot.utils.checks import RequirementsChecker
 
 checker = RequirementsChecker()
 
-UL_MODELS = ['yolov8', 'yolov9', 'yolov10', 'yolo11', 'rtdetr', 'sam']
+UL_MODELS = ['yolov8', 'yolov9', 'yolov10', 'yolo11', 'yolo12', 'rtdetr', 'sam']
 
 
 def is_ultralytics_model(yolo_name):
@@ -32,7 +32,7 @@ def get_yolo_inferer(yolo_model):
             import yolox  # for linear_assignment
             assert yolox.__version__
         except (ImportError, AssertionError, AttributeError):
-            checker.check_packages(('yolox==0.3.0',), cmds='--no-dependencies')
+            checker.check_packages(('yolox',))
             checker.check_packages(('tabulate',))  # needed dependency
             checker.check_packages(('thop',))  # needed dependency
         from .yolox import YoloXStrategy
@@ -41,6 +41,14 @@ def get_yolo_inferer(yolo_model):
         # ultralytics already installed when running track.py
         from .yolov8 import Yolov8Strategy
         return Yolov8Strategy
+    elif 'rf-detr' in str(yolo_model):
+        try:
+            import rfdetr
+        except (ImportError, AssertionError, AttributeError):
+            checker.check_packages(('onnxruntime',))  # needed dependency
+            checker.check_packages(('rfdetr',))  # needed dependency
+        from .rfdetr import RFDETRStrategy
+        return RFDETRStrategy
     elif 'yolo_nas' in str(yolo_model):
         try:
             import super_gradients  # for linear_assignment

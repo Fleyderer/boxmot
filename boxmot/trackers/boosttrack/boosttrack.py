@@ -229,10 +229,15 @@ class BoostTrack(BaseTracker):
                     dets_embs = self.reid_model.get_features(dets[:, :4], img)
         else:
             scores = np.empty(0)
+            dets_embs = np.ones((dets.shape[0], 1))
+            
 
-        if self.with_reid and len(self.trackers) > 0 and len(dets_embs) > 0:
+        if self.with_reid and len(self.trackers) > 0:
             tracker_embs = np.array([trk.get_emb() for trk in self.trackers])
-            emb_cost = dets_embs.reshape(dets_embs.shape[0], -1) @ tracker_embs.reshape((tracker_embs.shape[0], -1)).T
+            if dets_embs.shape[0] == 0:
+                emb_cost = np.empty((0, tracker_embs.shape[0]))
+            else:
+                emb_cost = dets_embs.reshape(dets_embs.shape[0], -1) @ tracker_embs.reshape((tracker_embs.shape[0], -1)).T
         else:
             emb_cost = None
 
